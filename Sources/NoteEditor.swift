@@ -564,6 +564,7 @@ struct NoteTextDirectionMenu: View {
 }
 
 struct NoteEditorView: View {
+    @ObservedObject private var display = DisplayPreferences.shared
     let note: Note
     @ObservedObject var deck: DeckModel
     unowned let controller: DeckController
@@ -621,7 +622,7 @@ struct NoteEditorView: View {
                          fontSize: deck.fontSize,
                          markdownEnabled: deck.markdown,
                          textDirection: note.textDirection,
-                         styleToken: "\(note.color)|\(deck.fontSize)|\(Settings.noteFontName)|\(deck.markdown)")
+                         styleToken: "\(display.resolvedTheme.rawValue)|\(note.color)|\(deck.fontSize)|\(Settings.noteFontName)|\(deck.markdown)")
             footer
         }
     }

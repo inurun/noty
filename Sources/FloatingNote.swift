@@ -195,6 +195,7 @@ private final class FloatingPanel: NSPanel {
 /// The note's paper, free of the deck. Same editor, same autosave; the header
 /// doubles as the drag handle.
 private struct FloatingNoteView: View {
+    @ObservedObject private var display = DisplayPreferences.shared
     let noteID: String
     let onActivity: () -> Void
     let onClose: () -> Void
@@ -216,7 +217,7 @@ private struct FloatingNoteView: View {
                              fontSize: Settings.noteFontSize,
                              markdownEnabled: Settings.markdownStyling,
                              textDirection: note.textDirection,
-                             styleToken: "\(note.color)|\(Settings.noteFontSize)|\(Settings.noteFontName)|\(Settings.markdownStyling)")
+                             styleToken: "\(display.resolvedTheme.rawValue)|\(note.color)|\(Settings.noteFontSize)|\(Settings.noteFontName)|\(Settings.markdownStyling)")
             }
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)

@@ -208,3 +208,12 @@
 "width.standard" = "Standard";
 "width.very_wide" = "Very wide";
 "width.wide" = "Wide";
+
+// Local appearance preferences
+"settings.notes.choose_font" = "Choose…";
+"settings.notes.theme" = "Theme";
+"theme.system" = "Follow macOS";
+"theme.light" = "Light";
+"theme.dark" = "Dark";
+"theme.sepia" = "Sepia";
+"theme.nord" = "Nord";

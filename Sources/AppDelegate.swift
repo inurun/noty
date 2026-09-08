@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        DisplayPreferences.shared.start()
         buildMainMenu()
 
         deckManager = DeckManager()
@@ -68,6 +69,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Re-read preferences into every deck. Settings calls this on each change.
     func refreshDecks() { deckManager.refreshAll() }
+    func refreshDisplay() {
+        DisplayPreferences.shared.refresh()
+        deckManager?.refreshTypography()
+        SettingsWindow.shared.syncTypography()
+    }
     @objc func openArchive() { LibraryWindow.shared.show(mode: .archive) }
 
     @objc func toggleOverFullScreen() {
@@ -85,13 +91,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func setFontSize(_ sender: NSMenuItem) {
         guard let size = sender.representedObject as? Double else { return }
         Settings.noteFontSize = size
-        deckManager.refreshAll()
+        refreshDisplay()
     }
 
     /// ⌃+ / ⌃- while a note is open.
     func stepFontSize(by delta: Double) {
         Settings.noteFontSize += delta
-        deckManager.refreshAll()
+        refreshDisplay()
     }
 
     @objc func biggerText()  { stepFontSize(by: 1.5) }
@@ -100,7 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func setNoteFont(_ sender: NSMenuItem) {
         guard let name = sender.representedObject as? String else { return }
         Settings.noteFontName = name
-        deckManager.refreshAll()
+        refreshDisplay()
     }
 
     @objc func toggleDeckAlwaysShown() {

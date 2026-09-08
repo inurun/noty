@@ -762,6 +762,13 @@ final class DeckManager {
         for d in decks.values where d !== active { d.collapseToRest() }
     }
 
+    func refreshTypography() {
+        decks.values.forEach {
+            $0.model.syncPreferences()
+            $0.layout()
+        }
+    }
+
     func refreshAll() {
         rebuild()
         decks.values.forEach {

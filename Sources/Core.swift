@@ -55,7 +55,7 @@ struct NoteColor {
 
     /// Slightly deeper than a highlighter pastel, so a note reads as paper with
     /// colour in it rather than a tinted white rectangle.
-    static let all: [NoteColor] = [
+    private static let light: [NoteColor] = [
         NoteColor(name: "Lemon",  paper: hex(0xFCE795), dash: hex(0xE0AD08), ink: hex(0x3A3008)),
         NoteColor(name: "Peach",  paper: hex(0xFBCFA6), dash: hex(0xE2762A), ink: hex(0x422413)),
         NoteColor(name: "Rose",   paper: hex(0xFAC4D1), dash: hex(0xDC4570), ink: hex(0x40161F)),
@@ -65,6 +65,32 @@ struct NoteColor {
         NoteColor(name: "Sand",   paper: hex(0xE3D3B4), dash: hex(0xA37B3C), ink: hex(0x372C18)),
         NoteColor(name: "Slate",  paper: hex(0xCBD6E2), dash: hex(0x4E6579), ink: hex(0x1A242E)),
     ]
+
+    static var all: [NoteColor] { palette(for: DisplayPreferences.shared.resolvedTheme) }
+
+    static func palette(for theme: AppTheme) -> [NoteColor] {
+        guard theme != .light && theme != .system else { return light }
+        let accents: [UInt32] = theme == .nord
+            ? [0xEBCB8B, 0xD08770, 0xBF616A, 0xB48EAD, 0x81A1C1, 0xA3BE8C, 0xD8C5A4, 0x88C0D0]
+            : [0xEAC86A, 0xEBA473, 0xED91AE, 0xB5A0ED, 0x85BDEF, 0x7DCCAC, 0xCDB68B, 0x9EB7CD]
+        let papers: [UInt32]
+        let ink: UInt32
+        switch theme {
+        case .sepia:
+            papers = [0xF1E5C8, 0xF0DECA, 0xEDDBD5, 0xE5DDE5, 0xDDE3E3, 0xE1E6D4, 0xE9DFC9, 0xDDE0DC]
+            ink = 0x42382B
+        case .nord:
+            papers = [0x383D47, 0x3D3B44, 0x3D3744, 0x39394B, 0x2E3B50, 0x303F44, 0x3B3D42, 0x2E3440]
+            ink = 0xECEFF4
+        default:
+            papers = [0x302D22, 0x342920, 0x33252C, 0x2C2637, 0x222D38, 0x22322D, 0x302C25, 0x272D34]
+            ink = 0xF1F0EB
+        }
+        return light.enumerated().map { index, original in
+            NoteColor(name: original.name, paper: hex(papers[index]),
+                      dash: theme == .sepia ? original.dash : hex(accents[index]), ink: hex(ink))
+        }
+    }
 
     static func at(_ i: Int) -> NoteColor { all[((i % all.count) + all.count) % all.count] }
 
@@ -120,9 +146,17 @@ enum Ink {
     static var face: NoteFace {
         let want = Settings.noteFontName
         if let cached = faceCache, cached.name == want { return cached.face }
-        let resolved = faces.first { $0.body == want } ?? faces[0]
+        let resolved = resolve(want)
         faceCache = (want, resolved)
         return resolved
+    }
+
+    static func resolve(_ name: String) -> NoteFace {
+        if let preset = faces.first(where: { $0.body == name }) { return preset }
+        guard let font = NSFont(name: name, size: 12) else { return faces[0] }
+        let heavier = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+        return NoteFace(name: font.displayName ?? name, body: font.fontName,
+                        tab: heavier.fontName, bump: 0)
     }
 
     /// The hand (or face) note bodies are set in.

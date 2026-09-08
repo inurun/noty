@@ -6,8 +6,28 @@ SwiftUI and AppKit.
 No dock icon, no window to manage. Slide the pointer to the right edge and the
 deck fans out.
 
-**[noty-sepia.vercel.app](https://noty-sepia.vercel.app)** ·
-**[Download the latest DMG](https://github.com/aimen08/noty/releases/latest/download/Noty.dmg)**
+## Personal fork: fonts, themes, and Homebrew
+
+This is a personal fork of [aimen08/noty](https://github.com/aimen08/noty), with
+any installed font selectable through the macOS font panel and five themes:
+Follow macOS, Light, Dark (default), Sepia, and Nord.
+
+```sh
+brew tap inurun/noty https://github.com/inurun/noty.git
+brew install --cask inurun/noty/noty-local
+```
+
+Requires macOS 15 or later. The release ZIP supports Apple Silicon and Intel;
+no local build is needed. [Download the personal fork](https://github.com/inurun/noty/releases/latest).
+The screenshots below show the original light appearance.
+
+Quit any existing Noty before installing. A manually installed Noty must be
+moved to Trash first. Notes and settings are retained; do not run both copies
+at once. This app is ad-hoc signed, so macOS may require first-launch approval
+in System Settings → Privacy & Security.
+
+Update with `brew update` followed by `brew upgrade --cask noty-local`.
+The personal fork does not include Sparkle or fetch upstream app updates.
 
 ![Noty in use: the deck fans out from the screen edge, a checklist is pulled open, two tasks are ticked off, and the note is dismissed by clicking away](demo.gif)
 
@@ -191,10 +211,8 @@ import reads that back. All Notes shows a `done/total` count per note.
   colours and timestamps stay in plaintext so lists render without unsealing
   every row.
 - No account, no server, no analytics, no telemetry, no tracking SDKs.
-- **One network request, ever:** Sparkle fetches the appcast to see whether a
-  newer version exists. Nothing about your notes is sent — it is a plain GET of
-  a public XML file. Turn it off with *Check automatically* in the pill's menu,
-  and it never fires again.
+- **No in-app updater in this fork.** Homebrew downloads published releases when
+  you request an installation or update.
 - No Accessibility permission, no Screen Recording, no system permissions.
 
 Verify it yourself:
@@ -207,14 +225,10 @@ strings ~/Library/Application\ Support/Noty/notes.db | grep "some text from a no
 ## Build
 
 Requires the Swift toolchain from Command Line Tools (**Xcode is not needed**)
-and macOS 15+. A local release build produces a universal app; releases ship
-one DMG per architecture instead — `Noty.dmg` for Apple Silicon and
-`Noty-intel.dmg` for Intel, each a third smaller than a universal image, with
-its own Sparkle feed (`appcast.xml` / `appcast-intel.xml`) baked into the build
-so updates stay on the right architecture.
-
+and macOS 15+. Release builds produce a universal app for Apple Silicon and
+Intel; debug builds target the current Mac. This fork distributes one universal
+ZIP through Homebrew and does not include Sparkle.
 ```sh
-./scripts/fetch-sparkle.sh   # once — pulls the Sparkle binary framework
 ./build.sh                   # release build → build/Noty.app
 ./build.sh debug             # fast, unoptimised
 ./build.sh release run       # build, then relaunch
@@ -229,66 +243,68 @@ architectures, combines the resulting binaries with `lipo`, assembles the
 Sparkle is optional. Without `Sparkle/Sparkle.framework` the app still builds —
 `Updater.swift` compiles to a stub and the update menu says so.
 
-### Branches
+### Local font and theme customization
 
-`dev` is where work lands — every pull request targets it, and CI builds it.
-`main` is the release branch: **merging `dev` into `main` is what cuts a
-release**, so nothing reaches `main` until it has been tried.
+Settings → Notes now offers **Choose…** to open the macOS font panel, plus
+**System** to reset the face. Choose any installed font; use the panel's
+collection menu to select **All Fonts** if it is filtering by language.
+The panel and text-size slider share the existing 10–30 pt setting.
 
-### Releasing
+**Theme** offers Follow macOS, Light, Dark (the default), Sepia, and Nord.
+Changes apply immediately to open notes and previews. The eight note colors
+keep their original identities in storage and exports; themes only change
+how they are drawn. Follow macOS also responds to appearance changes while
+Noty is running.
 
-```sh
-git checkout main && git merge --no-ff dev -m "release: 1.2.0"
-git push origin main
-```
+For this local fork, build with `./build.sh debug` without fetching Sparkle,
+quit the installed Noty, then open `build/Noty.app`. This uses the existing
+Noty preferences and `~/Library/Application Support/Noty/` data. Run only one
+copy at a time. The installed application is not replaced by the build.
 
-That fires `.github/workflows/release.yml`, which builds the app, packages a
-DMG, signs it with the EdDSA key, writes `appcast.xml`, publishes a GitHub
-Release and commits the appcast so installed copies can see the update.
+### Homebrew management and migration
 
-The version comes from **`release: X.Y.Z`** anywhere in the merge commit
-message. Leave it out and the patch is bumped from the newest tag, which is
-what a hotfix wants. A version that is already tagged is a no-op, so re-running
-the job is safe.
+The remote cask lives in this repository at `Casks/noty-local.rb`, and downloads
+its universal ZIP from this repository's Releases. The installed app lives at
+`/Applications/Noty.app`; it uses the original notes and preferences.
 
-Release notes are written by `scripts/make-release-notes.sh` from the pull
-requests the release actually contains — matched by whether their merge commit
-is reachable, not by date, since work merged into `dev` sits unreleased until
-`dev` lands. Every one of them is listed with a link and its author, on the
-release page and in the Sparkle update dialog. Run it yourself to see what the
-next release will say:
+If you previously used the local-only `inurun/local/noty-local` cask, quit Noty
+and migrate once:
 
 ```sh
-VERSION=1.2.0 ./scripts/make-release-notes.sh
+brew uninstall --cask noty-local
+brew tap inurun/noty https://github.com/inurun/noty.git
+brew install --cask inurun/noty/noty-local
 ```
 
-Work that ships without a pull request of its own being merged — a cherry-pick,
-or a branch only part of which was taken — is credited with a trailer on the
-commit that takes it, which the same script turns into a **Thanks** section:
+Uninstalling without `--zap` keeps notes and settings. The old local tap can be
+removed with `brew untap inurun/local` if it contains no other packages.
 
-```
-Thanks-to: @handle — what it was for
-```
+`./scripts/install-homebrew.sh` now installs or updates the **published** fork;
+it no longer builds this checkout. Use `./build.sh debug` for unpublished local
+changes. The old `package-homebrew.sh` remains available for preparing an
+offline, native-architecture package; it does not publish or install anything.
 
-Documentation, the site, the media and the appcast are excluded from the
-trigger, so a README push to `main` never cuts a release. `workflow_dispatch`
-with a version is the manual escape hatch.
+### Releasing this fork
 
-It needs one repository secret, **`SPARKLE_PRIVATE_KEY`** — the contents of the
-key `scripts/fetch-sparkle.sh`'s toolchain generated. The matching public key is
-already in `Info.plist` as `SUPublicEDKey`; an update signed by any other key is
-refused by the installed app.
+1. Commit and push the source changes to `main` after testing.
+2. Update `RELEASE-NOTES.md` with the behavior shipped in the next release.
+3. Run **Release personal fork** from GitHub Actions on this repository.
 
-To build a DMG by hand:
+The manually triggered workflow tests the editor, builds an updater-free
+universal app, and creates a UTC timestamp version (`YYYY.MM.DD.HHMMSS`).
+It uploads a draft release, pushes the matching cask version and SHA-256 to
+`main`, then publishes the release. Ordinary pushes do not publish releases.
+No Sparkle signing secret or additional tap repository is required.
 
-```sh
-./build.sh release && ./scripts/make-dmg.sh 1.0.1
-```
+`./scripts/package-release.sh` can prepare the same ZIP and cask locally for
+inspection. It does not commit, push, or publish. The default release tag is
+`local-v<version>`, separate from upstream's tags. The package carries the
+upstream base version 1.6.1 and a timestamp build number.
 
-**Signing note.** Sparkle ships signed by its own team, and dyld refuses to load
-a framework whose Team ID differs from the process — so `build.sh` re-signs the
-framework (innermost bundle first) with the same identity as the app. Set
-`CODESIGN_IDENTITY` to use a Developer ID instead of an ad-hoc signature.
+If publication fails, inspect the workflow log and any draft release before
+retrying. If a cask commit was pushed but final publication failed, publish the
+matching draft to make the archive available. Never replace a published ZIP
+under the same version: prepare a new release with a new checksum instead.
 
 ## Layout
 
@@ -345,8 +361,8 @@ Set `NOTY_DEBUG_DECK=1` in the environment to trace deck state transitions on st
 MIT — see [LICENSE](LICENSE). Do what you like with it; keep the copyright
 notice.
 
-Noty bundles [Sparkle](https://github.com/sparkle-project/Sparkle) (also MIT)
-for updates. Its notice is reproduced in
+The upstream build optionally bundles [Sparkle](https://github.com/sparkle-project/Sparkle)
+(also MIT) for updates; this fork’s Homebrew releases omit it. Its notice is reproduced in
 [licenses/THIRD-PARTY.txt](licenses/THIRD-PARTY.txt) and copied into
 `Noty.app/Contents/Resources/`, so it travels with every DMG as its licence
 requires.

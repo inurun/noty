@@ -208,3 +208,12 @@
 "width.standard" = "标准";
 "width.very_wide" = "特宽";
 "width.wide" = "宽";
+
+// Local appearance preferences
+"settings.notes.choose_font" = "选择…";
+"settings.notes.theme" = "主题";
+"theme.system" = "跟随系统";
+"theme.light" = "浅色";
+"theme.dark" = "深色";
+"theme.sepia" = "暖褐色";
+"theme.nord" = "Nord";

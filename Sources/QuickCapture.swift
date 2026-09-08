@@ -97,6 +97,7 @@ private final class CapturePanel: NSPanel {
 }
 
 private struct CaptureView: View {
+    @ObservedObject private var display = DisplayPreferences.shared
     let onSave: (String, String?) -> Void
     let onCancel: () -> Void
 
@@ -137,7 +138,7 @@ private struct CaptureView: View {
             }
 
             TextEditor(text: $text)
-                .font(Ink.body(13.5).swiftUIFont)
+                .font(Ink.body(Settings.noteFontSize).swiftUIFont)
                 .foregroundStyle(pal.ink)
                 .scrollContentBackground(.hidden)
                 .focused($focused)

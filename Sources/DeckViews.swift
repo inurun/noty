@@ -3,6 +3,7 @@ import SwiftUI
 // MARK: - Root
 
 struct DeckRootView: View {
+    @ObservedObject private var display = DisplayPreferences.shared
     @ObservedObject var deck: DeckModel
     unowned let controller: DeckController
     @ObservedObject var store = NoteStore.shared
@@ -452,6 +453,7 @@ func edgeTabShape(onRight: Bool, radius r: CGFloat = 11) -> UnevenRoundedRectang
 /// Tabs overlap, so the label is pinned to the top of the tab — the part that
 /// stays uncovered. Hovering lifts the whole tab clear to reveal the rest of it.
 struct VerticalTab: View {
+    @ObservedObject private var display = DisplayPreferences.shared
     let note: Note
     let isOpen: Bool
     let height: CGFloat
@@ -544,6 +546,7 @@ struct VerticalTab: View {
 
 /// Compact style — colour only, so the deck barely touches the screen.
 struct ChipTab: View {
+    @ObservedObject private var display = DisplayPreferences.shared
     let note: Note
     let isOpen: Bool
     let onRight: Bool
@@ -571,6 +574,7 @@ struct ChipTab: View {
 
 /// Flyout preview card showing a note's title, checklist progress, and body snippet on tab hover.
 struct NotePreviewCard: View {
+    @ObservedObject private var display = DisplayPreferences.shared
     let note: Note
     let onRight: Bool
     var onHoverChanged: ((Bool) -> Void)? = nil
@@ -584,7 +588,7 @@ struct NotePreviewCard: View {
                         .fill(note.palette.dash)
                         .frame(width: 7, height: 7)
                     Text(note.displayTitle)
-                        .font(.system(size: 11.5, weight: .bold))
+                        .font(Ink.bodyFont(11.5).bold())
                         .foregroundStyle(note.palette.ink)
                         .lineLimit(1)
                     Spacer(minLength: 0)
@@ -618,14 +622,14 @@ struct NotePreviewCard: View {
                                         .font(.system(size: 8.5))
                                         .foregroundStyle(note.palette.ink.opacity(isDone ? 0.45 : 0.75))
                                     Text(Tasks.stripped(line))
-                                        .font(.system(size: 10.5))
+                                        .font(Ink.bodyFont(10.5))
                                         .strikethrough(isDone, color: note.palette.ink.opacity(0.45))
                                         .foregroundStyle(note.palette.ink.opacity(isDone ? 0.45 : 0.85))
                                         .lineLimit(1)
                                 }
                             } else {
                                 Text(line)
-                                    .font(.system(size: 10.5))
+                                    .font(Ink.bodyFont(10.5))
                                     .foregroundStyle(note.palette.ink.opacity(0.8))
                                     .lineLimit(1)
                             }
@@ -657,6 +661,7 @@ struct NotePreviewCard: View {
 }
 
 struct MoreTab: View {
+    @ObservedObject private var display = DisplayPreferences.shared
     let count: Int
     let height: CGFloat
     let onRight: Bool
@@ -681,6 +686,7 @@ struct MoreTab: View {
 }
 
 struct EmptyTab: View {
+    @ObservedObject private var display = DisplayPreferences.shared
     let height: CGFloat
     let strip: CGFloat
     let onRight: Bool

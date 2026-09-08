@@ -8,6 +8,8 @@ struct EditorStyleEngineTests {
     private static var failures = 0
 
     static func main() {
+        testDisplayPreferences()
+        testThemeChangeDuringComposition()
         testSingleCharacterScope()
         testNewlineBoundaries()
         testDistantRangesStayDisjoint()
@@ -38,6 +40,85 @@ struct EditorStyleEngineTests {
         guard !condition() else { return }
         failures += 1
         fputs("\(file):\(line): failure: \(message)\n", stderr)
+    }
+
+    private static func testDisplayPreferences() {
+        _ = NSApplication.shared
+        let suite = "noty-appearance-tests-" + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        check(Settings.theme(in: defaults) == .dark, "new installs default to dark")
+        defaults.set("unknown", forKey: "theme")
+        check(Settings.theme(in: defaults) == .dark, "unknown themes fall back to dark")
+        let names = NoteColor.palette(for: .light).map(\.name)
+        for theme in AppTheme.allCases {
+            defaults.set(theme.rawValue, forKey: "theme")
+            check(Settings.theme(in: UserDefaults(suiteName: suite)!) == theme,
+                  "theme must survive a fresh defaults reader")
+            let colors = NoteColor.palette(for: theme)
+            check(colors.count == 8 && colors.map(\.name) == names,
+                  "themes must preserve archive color identifiers and order")
+            for color in colors {
+                func luminance(_ color: Color) -> Double {
+                    let c = NSColor(color).usingColorSpace(.sRGB)!
+                    func linear(_ v: CGFloat) -> Double {
+                        let v = Double(v)
+                        return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
+                    }
+                    return 0.2126 * linear(c.redComponent) + 0.7152 * linear(c.greenComponent)
+                        + 0.0722 * linear(c.blueComponent)
+                }
+                let paper = luminance(color.paper), ink = luminance(color.ink)
+                check((max(paper, ink) + 0.05) / (min(paper, ink) + 0.05) >= 7,
+                      "body text must have strong contrast in \(theme.rawValue)/\(color.name)")
+            }
+        }
+        check(AppTheme.system.resolved(systemIsDark: true) == .dark, "system dark resolution")
+        check(AppTheme.system.resolved(systemIsDark: false) == .light, "system light resolution")
+        check(AppTheme.nord.resolved(systemIsDark: false) == .nord, "explicit theme ignores OS")
+        let presetNames = Set(Ink.allFaces.map(\.body))
+        let arbitrary = NSFontManager.shared.availableFonts.first { !presetNames.contains($0) }!
+        check(Ink.resolve(arbitrary).body == NSFont(name: arbitrary, size: 12)!.fontName,
+              "installed fonts outside the old menu must resolve")
+        check(Ink.resolve("noty-nonexistent-font").body.isEmpty, "missing font falls back to system")
+        check(Ink.resolve("").body.isEmpty, "system font selection is preserved")
+        for preset in Ink.faces {
+            check(Ink.resolve(preset.body).tab == preset.tab, "existing font presets retain tab face")
+        }
+    }
+
+    private static func testThemeChangeDuringComposition() {
+        _ = NSApplication.shared
+        let box = TextBox("日本語 **bold** `code`\n")
+        let binding = Binding<String>(get: { box.value }, set: { box.value = $0 })
+        var parent = NoteTextView(text: binding, ink: .black, bridge: EditorBridge(),
+                                  autofocus: false, styleToken: "light")
+        let coordinator = NoteTextView.Coordinator(parent)
+        let tv = makeTaskTextView(box.value)
+        tv.delegate = coordinator
+        coordinator.attach(to: tv)
+        tv.setSelectedRange(NSRange(location: tv.string.utf16.count, length: 0))
+        tv.setMarkedText("にほんご", selectedRange: NSRange(location: 4, length: 0),
+                         replacementRange: NSRange(location: NSNotFound, length: 0))
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: tv))
+        let marked = tv.markedRange(), selection = tv.selectedRange(), text = tv.string
+        parent = NoteTextView(text: binding, ink: .white, bridge: parent.bridge,
+                              autofocus: false, fontSize: 18, styleToken: "dark")
+        coordinator.parent = parent
+        coordinator.synchronize(tv)
+        check(tv.hasMarkedText() && tv.markedRange() == marked, "theme change preserves Japanese composition")
+        check(tv.selectedRange() == selection && tv.string == text, "theme change preserves text and selection")
+        tv.unmarkText()
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: tv))
+        check(tv.insertionPointColor == .white, "deferred theme updates the caret after commit")
+        check(tv.selectedRange() == selection, "restyling preserves committed selection")
+        let selected = NSRange(location: 0, length: 3)
+        tv.setSelectedRange(selected)
+        coordinator.parent = NoteTextView(text: binding, ink: .black, bridge: parent.bridge,
+                                          autofocus: false, fontSize: 12, styleToken: "sepia")
+        coordinator.synchronize(tv)
+        check(tv.selectedRange() == selected && tv.string == text, "font/theme changes preserve selected text")
+        check(tv.insertionPointColor == .black, "theme changes update caret immediately outside composition")
     }
 
     private static func testTextDirectionConfiguration() {

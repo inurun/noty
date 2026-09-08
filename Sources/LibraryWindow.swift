@@ -66,6 +66,7 @@ final class LibraryWindow: NSObject, NSWindowDelegate {
 // MARK: - View
 
 struct LibraryView: View {
+    @ObservedObject private var display = DisplayPreferences.shared
     @ObservedObject var model: LibraryModel
     @ObservedObject var store = NoteStore.shared
 
@@ -255,6 +256,7 @@ struct LibraryView: View {
 // MARK: - Detail pane
 
 struct LibraryDetail: View {
+    @ObservedObject private var display = DisplayPreferences.shared
     let note: Note
     let bridge: EditorBridge
 
@@ -335,7 +337,7 @@ struct LibraryDetail: View {
                          autofocus: false, fontSize: Settings.noteFontSize,
                          markdownEnabled: Settings.markdownStyling,
                          textDirection: note.textDirection,
-                         styleToken: "\(note.color)|\(Settings.noteFontSize)|\(Settings.noteFontName)|\(Settings.markdownStyling)")
+                         styleToken: "\(display.resolvedTheme.rawValue)|\(note.color)|\(Settings.noteFontSize)|\(Settings.noteFontName)|\(Settings.markdownStyling)")
                 .background(pal.paper)
         }
         .onAppear {

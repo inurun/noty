@@ -121,9 +121,10 @@ final class SettingsModel: ObservableObject {
     }
     @Published var updateStatus: String = ""
 
-    @Published var fontName: String     { didSet { Settings.noteFontName = fontName; apply() } }
-    @Published var fontSize: Double     { didSet { Settings.noteFontSize = fontSize; apply() } }
-    @Published var markdown: Bool       { didSet { Settings.markdownStyling = markdown; apply() } }
+    @Published var theme: AppTheme { didSet { Settings.theme = theme; applyDisplay() } }
+    @Published var fontName: String { didSet { Settings.noteFontName = fontName; applyDisplay() } }
+    @Published var fontSize: Double     { didSet { Settings.noteFontSize = fontSize; applyDisplay() } }
+    @Published var markdown: Bool       { didSet { Settings.markdownStyling = markdown; applyDisplay() } }
     @Published var noteSizeIndex: Int   { didSet { Settings.noteSizeIndex = noteSizeIndex; apply() } }
     @Published var openOnHover: Bool    { didSet { Settings.openOnHover = openOnHover; apply() } }
     @Published var tabPreview: Bool     { didSet { Settings.tabPreview = tabPreview; apply() } }
@@ -161,6 +162,7 @@ final class SettingsModel: ObservableObject {
         overFullScreen = Settings.showOverFullScreen
         launchAtLogin = Settings.launchAtLogin
         autoUpdate = Updater.available && Updater.shared.automaticallyChecks
+        theme = Settings.theme
         fontName = Settings.noteFontName
         fontSize = Settings.noteFontSize
         markdown = Settings.markdownStyling
@@ -199,6 +201,18 @@ final class SettingsModel: ObservableObject {
         displayTarget = Settings.displayTarget
         tabPreview = Settings.tabPreview
         syncing = false
+    }
+
+    func syncTypography() {
+        syncing = true
+        if fontName != Settings.noteFontName { fontName = Settings.noteFontName }
+        if fontSize != Settings.noteFontSize { fontSize = Settings.noteFontSize }
+        syncing = false
+    }
+
+    private func applyDisplay() {
+        guard !loading, !syncing else { return }
+        (NSApp.delegate as? AppDelegate)?.refreshDisplay()
     }
 
     private func apply() {
@@ -255,6 +269,38 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         model.syncFromDefaults()
     }
 
+    func syncTypography() {
+        model.syncTypography()
+        if NSFontPanel.shared.isVisible { synchronizeFontPanel() }
+    }
+
+    private func synchronizeFontPanel() {
+        let font = model.fontName.isEmpty ? NSFont.systemFont(ofSize: model.fontSize)
+            : NSFont(name: model.fontName, size: model.fontSize) ?? NSFont.systemFont(ofSize: model.fontSize)
+        NSFontManager.shared.setSelectedFont(font, isMultiple: false)
+    }
+
+    func chooseFont() {
+        let manager = NSFontManager.shared
+        manager.target = self
+        manager.action = #selector(changeNoteFont(_:))
+        synchronizeFontPanel()
+        manager.orderFrontFontPanel(nil)
+        NSFontPanel.shared.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func changeNoteFont(_ sender: NSFontManager) {
+        let base = NSFont(name: model.fontName, size: model.fontSize)
+            ?? NSFont.systemFont(ofSize: model.fontSize)
+        let font = sender.convert(base)
+        // Capture both before publishing: updating the model also syncs the panel.
+        let name = font.fontName
+        let size = min(max(Double(font.pointSize), Settings.fontRange.lowerBound), Settings.fontRange.upperBound)
+        model.fontName = name
+        model.fontSize = size
+        synchronizeFontPanel()
+    }
+
     func show() {
         if window == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 500),
@@ -273,6 +319,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        NSFontPanel.shared.orderOut(nil)
+        NSFontManager.shared.target = nil
         DispatchQueue.main.async {
             if LibraryWindow.shared.isOpen == false { NSApp.setActivationPolicy(.accessory) }
         }
@@ -434,8 +482,16 @@ struct SettingsView: View {
     @ViewBuilder
     private var notesTab: some View {
         row(L10n.text("settings.notes.font")) {
-            Picker("", selection: $model.fontName) {
-                ForEach(Ink.faces, id: \.body) { Text($0.localizedName).tag($0.body) }
+            HStack {
+                Text(Ink.resolve(model.fontName).localizedName)
+                    .lineLimit(1).truncationMode(.middle).frame(width: 170, alignment: .leading)
+                Button(L10n.text("settings.notes.choose_font")) { SettingsWindow.shared.chooseFont() }
+                Button(L10n.text("font.system")) { model.fontName = "" }
+            }
+        }
+        row(L10n.text("settings.notes.theme")) {
+            Picker("", selection: $model.theme) {
+                ForEach(AppTheme.allCases) { Text($0.title).tag($0) }
             }.labelsHidden().frame(width: 200)
         }
         row(L10n.text("settings.notes.note_size")) {

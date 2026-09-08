@@ -124,6 +124,15 @@ enum Settings {
         set { d.set(newValue, forKey: "noteFontName") }
     }
 
+    static var theme: AppTheme {
+        get { theme(in: d) }
+        set { d.set(newValue.rawValue, forKey: "theme") }
+    }
+
+    static func theme(in defaults: UserDefaults) -> AppTheme {
+        AppTheme(rawValue: defaults.string(forKey: "theme") ?? "") ?? .dark
+    }
+
     // MARK: Shortcuts
 
     private static func shortcut(_ key: String, default def: Shortcut) -> Shortcut {
