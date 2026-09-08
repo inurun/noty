@@ -271,13 +271,15 @@ If you previously used the local-only `inurun/local/noty-local` cask, quit Noty
 and migrate once:
 
 ```sh
-brew uninstall --cask noty-local
+brew uninstall --cask inurun/local/noty-local
+brew untap inurun/local
 brew tap inurun/noty https://github.com/inurun/noty.git
 brew install --cask inurun/noty/noty-local
 ```
 
-Uninstalling without `--zap` keeps notes and settings. The old local tap can be
-removed with `brew untap inurun/local` if it contains no other packages.
+Uninstalling without `--zap` keeps notes and settings. Only untap the old local
+tap if it contains no other packages. Remove it before installing the remote
+cask to avoid ambiguities between the two copies of `noty-local`.
 
 `./scripts/install-homebrew.sh` now installs or updates the **published** fork;
 it no longer builds this checkout. Use `./build.sh debug` for unpublished local
