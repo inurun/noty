@@ -19,7 +19,7 @@ if [ -e "$OUT" ]; then
 fi
 mkdir -p "$OUT" "$ROOT/build/module-cache" "$ROOT/Casks"
 BUILD_ARCHS="arm64 x86_64" BUILD_NUMBER="$(date +%s)" \
-    MARKETING_VERSION="${MARKETING_VERSION:-1.6.1}" \
+    MARKETING_VERSION="${MARKETING_VERSION:-1.9.0}" \
     CLANG_MODULE_CACHE_PATH="$ROOT/build/module-cache" \
     SWIFT_MODULE_CACHE_PATH="$ROOT/build/module-cache" \
     "$ROOT/build.sh" release

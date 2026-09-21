@@ -23,10 +23,16 @@ struct EditorStyleEngineTests {
         testStaleLinkAttributesAreCleared()
         testLongNotePlanningStaysLocal()
         testTextDirectionConfiguration()
+        testVerticalTabLabelLayout()
         testLegacyArchiveDefaultsToAutomaticDirection()
         testTextDirectionDatabaseMigration()
         LocalizationTests.run { check($0, $1) }
+        TaskMarkerTests.run { check($0, $1) }
+        CloudSyncTests.run { check($0, $1) }
+        SyncRunnerTests.run { check($0, $1) }
+        ImageInteractionTests.run { check($0, $1) }
         testCustomNoteTitleBehavior()
+        PersistenceTests.run { check($0, $1) }
 
         guard failures == 0 else {
             fputs("EditorStyleEngineTests: \(failures) failure(s)\n", stderr)
@@ -78,13 +84,11 @@ struct EditorStyleEngineTests {
         check(AppTheme.nord.resolved(systemIsDark: false) == .nord, "explicit theme ignores OS")
         let presetNames = Set(Ink.allFaces.map(\.body))
         let arbitrary = NSFontManager.shared.availableFonts.first { !presetNames.contains($0) }!
-        check(Ink.resolve(arbitrary).body == NSFont(name: arbitrary, size: 12)!.fontName,
+        check(Ink.resolveCustomFace(name: arbitrary)?.body == NSFont(name: arbitrary, size: 12)!.fontName,
               "installed fonts outside the old menu must resolve")
-        check(Ink.resolve("noty-nonexistent-font").body.isEmpty, "missing font falls back to system")
-        check(Ink.resolve("").body.isEmpty, "system font selection is preserved")
-        for preset in Ink.faces {
-            check(Ink.resolve(preset.body).tab == preset.tab, "existing font presets retain tab face")
-        }
+        check(Ink.resolveCustomFace(name: "noty-nonexistent-font") == nil,
+              "missing font falls back to system")
+        check(Ink.resolveCustomFace(name: "") == nil, "system font selection is preserved")
     }
 
     private static func testThemeChangeDuringComposition() {
@@ -191,6 +195,37 @@ struct EditorStyleEngineTests {
               "Automatic must resolve an English paragraph from its first strong character")
         check(hebrew?.baseWritingDirection == .rightToLeft && hebrew?.alignment == .right,
               "Automatic must resolve a Hebrew paragraph after neutral Markdown punctuation")
+    }
+
+    private static func testVerticalTabLabelLayout() {
+        let mixed = VerticalLabelLayout.runs(for: "中文 Note 2")
+        check(mixed == [
+            VerticalLabelRun(text: "中", orientation: .upright),
+            VerticalLabelRun(text: "文", orientation: .upright),
+            VerticalLabelRun(text: " Note 2", orientation: .rotated)
+        ], "mixed tab titles must keep CJK glyphs upright and group Latin runs: \(mixed)")
+
+        check(VerticalLabelLayout.isUpright("日"),
+              "Japanese characters must use upright vertical presentation")
+        check(VerticalLabelLayout.isUpright("한"),
+              "Hangul characters must use upright vertical presentation")
+        check(VerticalLabelLayout.isUpright("🙂"),
+              "emoji must use upright vertical presentation")
+        check(!VerticalLabelLayout.isUpright("A"),
+              "Latin letters must remain in rotated runs")
+        check(!VerticalLabelLayout.isUpright("2"),
+              "Arabic numerals must remain in rotated runs")
+
+        let cjkHeight = DeckGeom.verticalLabelHeight("中文")
+        check(cjkHeight >= DeckGeom.tabGlyphAdvance * 2,
+              "vertical CJK measurement must reserve one advance per character")
+
+        let fitted = VerticalLabelLayout.fittingRuns(
+            for: "中文标题", maxAdvance: DeckGeom.tabGlyphAdvance * 2.5)
+        check(fitted.last?.text == "…",
+              "a squeezed vertical title must end with an ellipsis")
+        check(fitted.reduce(0) { $0 + $1.advance } <= DeckGeom.tabGlyphAdvance * 2.5,
+              "fitted vertical title must stay within its strip")
     }
 
     private struct LegacyStickyNote: Codable {
@@ -511,8 +546,15 @@ struct EditorStyleEngineTests {
         check(storage.attribute(.notyHidden, at: openingBoldMarker,
                                 effectiveRange: nil) != nil,
               "Markdown markers outside the caret line must stay hidden")
-    }
 
+        let headingMarker = text.range(of: "# Heading").location
+        check(storage.attribute(.notyHidden, at: headingMarker,
+                                effectiveRange: nil) != nil,
+              "Heading prefix '# ' must be hidden outside active caret line to avoid left offset")
+        check(storage.attribute(.notyHidden, at: headingMarker + 1,
+                                effectiveRange: nil) != nil,
+              "Heading trailing space after '#' must also be hidden outside active line")
+    }
     private static func testMarkdownCanBeRemovedIncrementally() {
         let source = "**bold**\nplain"
         let text = source as NSString

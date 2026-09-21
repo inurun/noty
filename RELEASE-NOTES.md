@@ -1,8 +1,18 @@
-Personal fork of [aimen08/noty](https://github.com/aimen08/noty).
+Personal fork of [aimen08/noty](https://github.com/aimen08/noty), updated to
+the upstream 1.9.0 feature set.
 
-- Choose any installed font using the macOS font panel.
-- Five themes: Follow macOS, Light, Dark, Sepia, and Nord.
-- Appearance changes apply to open notes and previews.
+- Sync notes through the iCloud Drive folder for editing on iPhone and iPad.
+  Sync remains off by default; synced Markdown files are plaintext while the
+  local database remains encrypted.
+- Paste, drop, resize, export, and import inline images in note bodies.
+- Continue and indent bullet, numbered, and task lists with Return and Tab.
+- Keep the deck and notes on one Space instead of following every desktop.
+- Choose any installed font from Settings. The selected face applies throughout
+  the note, including its title, controls, tabs, previews, and library rows.
+- Five themes: Follow macOS, Light, Dark, Sepia, and Nord. Theme changes apply
+  immediately without replacing editor contents or interrupting Japanese IME.
+- More robust persistence surfaces failed saves, retries before quitting, and
+  preserves existing encrypted data when its key is missing or invalid.
 - Universal app for Apple Silicon and Intel, macOS 15 or later.
 - No Sparkle updater. Updates are managed through Homebrew.
 

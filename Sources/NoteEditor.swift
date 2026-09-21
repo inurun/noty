@@ -55,16 +55,32 @@ final class EditorBridge: ObservableObject {
         let line = ns.lineRange(for: NSRange(location: caret, length: 0))
         let text = ns.substring(with: line)
 
-        if Tasks.isTask(text) {
-            var length = 1
-            if line.length > 1, ns.character(at: line.location + 1) == 32 { length = 2 }
-            let range = NSRange(location: line.location, length: length)
-            guard tv.shouldChangeText(in: range, replacementString: "") else { return }
-            storage.replaceCharacters(in: range, with: "")
+        let indentRange = (text as NSString).range(of: "^[ \\t]*", options: .regularExpression)
+        let indent = indentRange.location != NSNotFound ? (text as NSString).substring(with: indentRange) : ""
+        let trimmed = String(text.dropFirst(indent.count))
+
+        if Tasks.isTask(trimmed) {
+            let marker = Tasks.marker(of: trimmed)!
+            if marker == Tasks.open {
+                // Toggle open -> done
+                let markerRange = NSRange(location: line.location + indent.count, length: 1)
+                guard tv.shouldChangeText(in: markerRange, replacementString: String(Tasks.done)) else { return }
+                storage.replaceCharacters(in: markerRange, with: String(Tasks.done))
+            } else {
+                // Toggle done -> plain text (remove marker + trailing space)
+                var length = 1
+                if trimmed.count > 1, trimmed[trimmed.index(after: trimmed.startIndex)] == " " {
+                    length = 2
+                }
+                let removeRange = NSRange(location: line.location + indent.count, length: length)
+                guard tv.shouldChangeText(in: removeRange, replacementString: "") else { return }
+                storage.replaceCharacters(in: removeRange, with: "")
+            }
         } else {
-            let range = NSRange(location: line.location, length: 0)
-            guard tv.shouldChangeText(in: range, replacementString: Tasks.openPrefix) else { return }
-            storage.replaceCharacters(in: range, with: Tasks.openPrefix)
+            // Plain text -> open task
+            let insertRange = NSRange(location: line.location + indent.count, length: 0)
+            guard tv.shouldChangeText(in: insertRange, replacementString: Tasks.openPrefix) else { return }
+            storage.replaceCharacters(in: insertRange, with: Tasks.openPrefix)
         }
         tv.didChangeText()
     }
@@ -117,6 +133,379 @@ final class HidingLayoutManager: NSLayoutManager {
 /// toggles it, Return carries the list on, and finished lines get struck through.
 final class TaskTextView: NSTextView {
 
+    /// Owns the image overlays and the line-height delegate for image tokens.
+    /// Installed by NoteTextView.makeNSView; kept on the view so the editor
+    /// coordinator can refresh it after every style pass.
+    var imageOverlays: NoteImageOverlayManager?
+
+    /// The image token currently revealed for delete-confirmation, if any.
+    /// Image markup is never shown just because the caret is near it; the only
+    /// way to see the path is to press delete at the image, which selects the
+    /// token text so a second delete removes it and a paste replaces it.
+    var revealedImageID: String?
+
+    override func deleteBackward(_ sender: Any?) {
+        // A range selection means the user deliberately selected content —
+        // delete it straight away, confirmation is for caret deletions only.
+        if selectedRange().length == 0, let token = hiddenImageTokenAtDeletionPoint() {
+            revealedImageID = token.id
+            setSelectedRange(token.range)
+            return
+        }
+        super.deleteBackward(sender)
+    }
+
+    /// While a token sits revealed for delete-confirmation its whole range
+    /// stays selected; typing, Return or pasting would silently replace the
+    /// markup and orphan the image. Treat those as "keep it": move the caret
+    /// below the image, which makes the coordinator clear the reveal and
+    /// re-hide the line.
+    private func cancelImageRevealIfSelected() -> Bool {
+        guard let id = revealedImageID, let storage = textStorage,
+              let token = ImageStore.tokens(in: storage.string).first(where: { $0.id == id }),
+              selectedRange() == token.range else { return false }
+        var caret = NSMaxRange(token.range)
+        if caret < storage.length, (storage.string as NSString).character(at: caret) == 10 {
+            caret += 1
+        }
+        setSelectedRange(NSRange(location: caret, length: 0))
+        return true
+    }
+
+    override func insertText(_ string: Any) {
+        if cancelImageRevealIfSelected() { return }
+        super.insertText(string)
+    }
+    override func insertNewline(_ sender: Any?) {
+        if cancelImageRevealIfSelected() { return }
+        if handleListAutoContinuationOnNewline() { return }
+        super.insertNewline(sender)
+    }
+
+    override func insertTab(_ sender: Any?) {
+        if handleTabIndentation(shift: false) { return }
+        super.insertTab(sender)
+    }
+
+    override func insertBacktab(_ sender: Any?) {
+        if handleTabIndentation(shift: true) { return }
+        super.insertBacktab(sender)
+    }
+
+    private func lineContentRange(for location: Int, in ns: NSString) -> (contentRange: NSRange, contentText: String) {
+        var start = 0
+        var end = 0
+        var contentsEnd = 0
+        ns.getLineStart(&start, end: &end, contentsEnd: &contentsEnd, for: NSRange(location: location, length: 0))
+        let range = NSRange(location: start, length: contentsEnd - start)
+        return (range, ns.substring(with: range))
+    }
+
+    private func handleListAutoContinuationOnNewline() -> Bool {
+        guard let storage = textStorage else { return false }
+        let ns = string as NSString
+        let sel = selectedRange()
+        guard sel.length == 0 else { return false }
+
+        let (lineRange, lineText) = lineContentRange(for: sel.location, in: ns)
+
+        // 1. Task checklist (☐ / ☑ or - [ ] / - [x])
+        let taskPattern = try! NSRegularExpression(pattern: "^([ \\t]*)([\u{2610}\u{2611}]|- \\[([ xX])\\])[ \\t]*(.*)$")
+        if let match = taskPattern.firstMatch(in: lineText, range: NSRange(location: 0, length: (lineText as NSString).length)) {
+            let indent = (lineText as NSString).substring(with: match.range(at: 1))
+            let bodyRange = match.range(at: 4)
+            let body = (lineText as NSString).substring(with: bodyRange).trimmingCharacters(in: .whitespacesAndNewlines)
+            if body.isEmpty {
+                // Empty item: pressing Enter clears the task marker and exits list
+                let replacement = indent.isEmpty ? "" : indent
+                if shouldChangeText(in: lineRange, replacementString: replacement) {
+                    storage.replaceCharacters(in: lineRange, with: replacement)
+                    didChangeText()
+                    setSelectedRange(NSRange(location: lineRange.location + (replacement as NSString).length, length: 0))
+                    return true
+                }
+            } else {
+                // Continue new empty task item
+                let nextPrefix = "\n\(indent)\(Tasks.openPrefix)"
+                if shouldChangeText(in: sel, replacementString: nextPrefix) {
+                    storage.replaceCharacters(in: sel, with: nextPrefix)
+                    didChangeText()
+                    setSelectedRange(NSRange(location: sel.location + (nextPrefix as NSString).length, length: 0))
+                    return true
+                }
+            }
+        }
+
+        // 2. Unordered bullet list (- / * / +)
+        let bulletPattern = try! NSRegularExpression(pattern: "^([ \\t]*)([-*+])[ \\t]+(.*)$")
+        if let match = bulletPattern.firstMatch(in: lineText, range: NSRange(location: 0, length: (lineText as NSString).length)) {
+            let indent = (lineText as NSString).substring(with: match.range(at: 1))
+            let bullet = (lineText as NSString).substring(with: match.range(at: 2))
+            let body = (lineText as NSString).substring(with: match.range(at: 3)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if body.isEmpty {
+                // Empty bullet item: exit list
+                let replacement = indent.isEmpty ? "" : indent
+                if shouldChangeText(in: lineRange, replacementString: replacement) {
+                    storage.replaceCharacters(in: lineRange, with: replacement)
+                    didChangeText()
+                    setSelectedRange(NSRange(location: lineRange.location + (replacement as NSString).length, length: 0))
+                    return true
+                }
+            } else {
+                let nextPrefix = "\n\(indent)\(bullet) "
+                if shouldChangeText(in: sel, replacementString: nextPrefix) {
+                    storage.replaceCharacters(in: sel, with: nextPrefix)
+                    didChangeText()
+                    setSelectedRange(NSRange(location: sel.location + (nextPrefix as NSString).length, length: 0))
+                    return true
+                }
+            }
+        }
+
+        // 3. Ordered / Hierarchical numbered list (e.g. 1. / 1.1 / 1.1.1.)
+        let orderedPattern = try! NSRegularExpression(pattern: "^([ \\t]*)((?:\\d+\\.)*\\d+)[.)][ \\t]+(.*)$")
+        if let match = orderedPattern.firstMatch(in: lineText, range: NSRange(location: 0, length: (lineText as NSString).length)) {
+            let indent = (lineText as NSString).substring(with: match.range(at: 1))
+            let rawNumber = (lineText as NSString).substring(with: match.range(at: 2))
+            let body = (lineText as NSString).substring(with: match.range(at: 3)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if body.isEmpty {
+                // Empty ordered item: exit list
+                let replacement = indent.isEmpty ? "" : indent
+                if shouldChangeText(in: lineRange, replacementString: replacement) {
+                    storage.replaceCharacters(in: lineRange, with: replacement)
+                    didChangeText()
+                    setSelectedRange(NSRange(location: lineRange.location + (replacement as NSString).length, length: 0))
+                    return true
+                }
+            } else {
+                let nextNumber = incrementNumberSection(rawNumber)
+                let nextPrefix = "\n\(indent)\(nextNumber). "
+                if shouldChangeText(in: sel, replacementString: nextPrefix) {
+                    storage.replaceCharacters(in: sel, with: nextPrefix)
+                    didChangeText()
+                    setSelectedRange(NSRange(location: sel.location + (nextPrefix as NSString).length, length: 0))
+                    return true
+                }
+            }
+        }
+
+        return false
+    }
+
+    private func incrementNumberSection(_ numberStr: String) -> String {
+        var parts = numberStr.split(separator: ".").map(String.init)
+        if let last = parts.last, let val = Int(last) {
+            parts[parts.count - 1] = String(val + 1)
+            return parts.joined(separator: ".")
+        }
+        return numberStr
+    }
+
+    private func handleTabIndentation(shift: Bool) -> Bool {
+        guard let storage = textStorage else { return false }
+        let ns = string as NSString
+        let sel = selectedRange()
+        let (lineRange, lineText) = lineContentRange(for: sel.location, in: ns)
+
+        // Check if current line is an ordered list (e.g. "1. " -> "1.1 " on Tab, "1.1 " -> "1. " on Shift+Tab)
+        let orderedPattern = try! NSRegularExpression(pattern: "^([ \\t]*)((?:\\d+\\.)*\\d+)[.)][ \\t]+(.*)$")
+        if let match = orderedPattern.firstMatch(in: lineText, range: NSRange(location: 0, length: (lineText as NSString).length)) {
+            let indent = (lineText as NSString).substring(with: match.range(at: 1))
+            let numStr = (lineText as NSString).substring(with: match.range(at: 2))
+            let rest = (lineText as NSString).substring(with: match.range(at: 3))
+
+            if !shift {
+                // Tab: create deeper sub-level (1. -> 1.1., 1.1 -> 1.1.1.)
+                let newNum = numStr + ".1"
+                let newLine = "\(indent)\(newNum). \(rest)"
+                if shouldChangeText(in: lineRange, replacementString: newLine) {
+                    storage.replaceCharacters(in: lineRange, with: newLine)
+                    didChangeText()
+                    let diff = (newLine as NSString).length - lineRange.length
+                    setSelectedRange(NSRange(location: max(0, sel.location + diff), length: 0))
+                    return true
+                }
+            } else {
+                // Shift+Tab: pop out of sub-level (1.1.1 -> 1.1, 1.1 -> 1)
+                var parts = numStr.split(separator: ".").map(String.init)
+                if parts.count > 1 {
+                    parts.removeLast()
+                    let newNum = parts.joined(separator: ".")
+                    let newLine = "\(indent)\(newNum). \(rest)"
+                    if shouldChangeText(in: lineRange, replacementString: newLine) {
+                        storage.replaceCharacters(in: lineRange, with: newLine)
+                        didChangeText()
+                        let diff = (newLine as NSString).length - lineRange.length
+                        setSelectedRange(NSRange(location: max(0, sel.location + diff), length: 0))
+                        return true
+                    }
+                }
+            }
+        }
+
+        // Bullet list or task item: adjust leading spaces/tabs on Tab / Shift+Tab
+        let bulletOrTaskPattern = try! NSRegularExpression(pattern: "^([ \\t]*)([-*+]|[\u{2610}\u{2611}]|- \\[[ xX]\\])[ \\t]+(.*)$")
+        if let match = bulletOrTaskPattern.firstMatch(in: lineText, range: NSRange(location: 0, length: (lineText as NSString).length)) {
+            let indent = (lineText as NSString).substring(with: match.range(at: 1))
+            let marker = (lineText as NSString).substring(with: match.range(at: 2))
+            let rest = (lineText as NSString).substring(with: match.range(at: 3))
+
+            if !shift {
+                let newIndent = indent + "  "
+                let newLine = "\(newIndent)\(marker) \(rest)"
+                if shouldChangeText(in: lineRange, replacementString: newLine) {
+                    storage.replaceCharacters(in: lineRange, with: newLine)
+                    didChangeText()
+                    setSelectedRange(NSRange(location: max(0, sel.location + 2), length: 0))
+                    return true
+                }
+            } else if !indent.isEmpty {
+                let newIndent: String
+                let removedCount: Int
+                if indent.hasPrefix("\t") {
+                    newIndent = String(indent.dropFirst(1))
+                    removedCount = 1
+                } else if indent.hasPrefix("  ") {
+                    newIndent = String(indent.dropFirst(2))
+                    removedCount = 2
+                } else {
+                    newIndent = String(indent.dropFirst(1))
+                    removedCount = 1
+                }
+                let newLine = "\(newIndent)\(marker) \(rest)"
+                if shouldChangeText(in: lineRange, replacementString: newLine) {
+                    storage.replaceCharacters(in: lineRange, with: newLine)
+                    didChangeText()
+                    setSelectedRange(NSRange(location: max(0, sel.location - removedCount), length: 0))
+                    return true
+                }
+            }
+            return true
+        }
+
+        return false
+    }
+
+    /// Symmetric with backspace-after-the-image: forward-deleting INTO a
+    /// hidden token reveals it for confirmation instead of eating a markup
+    /// character the user cannot see.
+    override func deleteForward(_ sender: Any?) {
+        if selectedRange().length == 0, let storage = textStorage,
+           let token = ImageStore.tokens(in: storage.string)
+               .first(where: { $0.range.location == selectedRange().location }),
+           storage.attribute(.notyHidden, at: token.range.location,
+                             effectiveRange: nil) != nil {
+            revealedImageID = token.id
+            setSelectedRange(token.range)
+            return
+        }
+        super.deleteForward(sender)
+    }
+
+    // MARK: Character-like image navigation
+
+    /// A hidden image token collapses to zero glyphs but should still walk
+    /// like one character: arrow keys never park the caret inside the dozens
+    /// of invisible markup characters. Left/right snap to the edge in the
+    /// direction of travel; up/down land on the nearer edge.
+    override func moveRight(_ sender: Any?) {
+        super.moveRight(sender)
+        snapCaretOutOfHiddenImageToken(edge: .trailing)
+    }
+
+    override func moveLeft(_ sender: Any?) {
+        super.moveLeft(sender)
+        snapCaretOutOfHiddenImageToken(edge: .leading)
+    }
+
+    override func moveUp(_ sender: Any?) {
+        super.moveUp(sender)
+        snapCaretOutOfHiddenImageToken(edge: .nearest)
+    }
+
+    override func moveDown(_ sender: Any?) {
+        super.moveDown(sender)
+        snapCaretOutOfHiddenImageToken(edge: .nearest)
+    }
+
+    private enum ImageCaretEdge { case leading, trailing, nearest }
+
+    private func snapCaretOutOfHiddenImageToken(edge: ImageCaretEdge) {
+        guard let storage = textStorage else { return }
+        let caret = selectedRange()
+        guard caret.length == 0 else { return }
+        for token in ImageStore.tokens(in: storage.string)
+        where caret.location > token.range.location && caret.location < NSMaxRange(token.range) {
+            guard storage.attribute(.notyHidden, at: token.range.location,
+                                    effectiveRange: nil) != nil else { return }
+            let target: Int
+            switch edge {
+            case .leading: target = token.range.location
+            case .trailing: target = NSMaxRange(token.range)
+            case .nearest:
+                let mid = token.range.location + token.range.length / 2
+                target = caret.location <= mid ? token.range.location : NSMaxRange(token.range)
+            }
+            setSelectedRange(NSRange(location: target, length: 0))
+            return
+        }
+    }
+
+    /// The hidden image token a caret-backspace would eat into, if any: the
+    /// caret sits inside/right after the markup (arrow keys can walk it onto
+    /// the collapsed line), or directly below the image where deleting would
+    /// consume the token line's newline.
+    private func hiddenImageTokenAtDeletionPoint() -> (id: String, width: CGFloat?, range: NSRange)? {
+        guard let storage = textStorage else { return nil }
+        let caret = selectedRange().location
+        let ns = storage.string as NSString
+        for token in ImageStore.tokens(in: storage.string) {
+            guard token.range.location < storage.length,
+                  storage.attribute(.notyHidden, at: token.range.location,
+                                    effectiveRange: nil) != nil else { continue }
+            if caret > token.range.location, caret <= NSMaxRange(token.range) { return token }
+            if caret == NSMaxRange(token.range) + 1, caret > 0,
+               ns.character(at: caret - 1) == 10 { return token }
+        }
+        return nil
+    }
+
+    override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
+        super.init(frame: frameRect, textContainer: container)
+        registerForDraggedTypes([.fileURL, .tiff, .png])
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        registerForDraggedTypes([.fileURL, .tiff, .png])
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        TaskTextView.wireEditMenu()
+    }
+
+    /// The Edit menu is built in AppDelegate, but the insert action belongs to
+    /// whichever note has focus, so the item's target is left nil and travels
+    /// the responder chain to this view.
+    private static var editMenuWired = false
+
+    private static func wireEditMenu() {
+        guard !editMenuWired, let mainMenu = NSApp.mainMenu else { return }
+        guard let edit = mainMenu.items.first(where: {
+            $0.submenu?.title == L10n.text("menu.edit")
+        })?.submenu else { return }
+        let action = #selector(insertImageFromPanel(_:))
+        guard !edit.items.contains(where: { $0.action == action }) else {
+            editMenuWired = true
+            return
+        }
+        edit.addItem(.separator())
+        edit.addItem(withTitle: L10n.text("menu.insert_image"),
+                     action: action, keyEquivalent: "")
+        editMenuWired = true
+    }
+
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if toggleBox(at: point) { return }
@@ -155,17 +544,19 @@ final class TaskTextView: NSTextView {
                                                    actualGlyphRange: nil)
         let safeLocation = min(visibleCharacters.location, ns.length)
         let safeLength = min(visibleCharacters.length, ns.length - safeLocation)
-        let lines = ns.lineRange(for: NSRange(location: safeLocation, length: safeLength))
+        let visibleRange = NSRange(location: safeLocation, length: safeLength)
 
-        ns.enumerateSubstrings(in: lines,
-                               options: .byLines) { sub, range, _, _ in
-            guard let sub, Tasks.isTask(sub) else { return }
-            let glyphs = lm.glyphRange(forCharacterRange: NSRange(location: range.location, length: 1),
+        ns.enumerateSubstrings(in: visibleRange, options: .byLines) { line, lineRange, _, _ in
+            guard let line, Tasks.isTask(line) else { return }
+            let lineText = line as NSString
+            let indentRange = lineText.range(of: "^[ \\t]*", options: .regularExpression)
+            let indentCount = indentRange.location != NSNotFound ? indentRange.length : 0
+            let glyphs = lm.glyphRange(forCharacterRange: NSRange(location: lineRange.location + indentCount, length: 1),
                                        actualCharacterRange: nil)
-            var r = lm.boundingRect(forGlyphRange: glyphs, in: tc)
-            r.origin.x += origin.x
-            r.origin.y += origin.y
-            self.addCursorRect(r.insetBy(dx: -3, dy: -2), cursor: .pointingHand)
+            var box = lm.boundingRect(forGlyphRange: glyphs, in: tc)
+            box.origin.x += origin.x
+            box.origin.y += origin.y
+            self.addCursorRect(box.insetBy(dx: -4, dy: -3), cursor: .pointingHand)
         }
     }
 
@@ -178,23 +569,114 @@ final class TaskTextView: NSTextView {
         let index = min(characterIndexForInsertion(at: point), max(0, ns.length - 1))
         let line = ns.lineRange(for: NSRange(location: index, length: 0))
         guard line.length > 0 else { return false }
-        let first = ns.character(at: line.location)
+
+        let lineText = ns.substring(with: line)
+        let indentRange = (lineText as NSString).range(of: "^[ \\t]*", options: .regularExpression)
+        let indentCount = indentRange.location != NSNotFound ? indentRange.length : 0
+        guard line.length > indentCount else { return false }
+
+        let first = ns.character(at: line.location + indentCount)
         guard first == Tasks.open.unicodeScalars.first!.value ||
               first == Tasks.done.unicodeScalars.first!.value else { return false }
 
-        let glyphs = lm.glyphRange(forCharacterRange: NSRange(location: line.location, length: 1),
+        let glyphs = lm.glyphRange(forCharacterRange: NSRange(location: line.location + indentCount, length: 1),
                                    actualCharacterRange: nil)
         var box = lm.boundingRect(forGlyphRange: glyphs, in: tc)
         box.origin.x += textContainerOrigin.x
         box.origin.y += textContainerOrigin.y
         guard box.insetBy(dx: -4, dy: -3).contains(point) else { return false }
 
-        let target = NSRange(location: line.location, length: 1)
+        let target = NSRange(location: line.location + indentCount, length: 1)
         let flipped = String(first == Tasks.open.unicodeScalars.first!.value ? Tasks.done : Tasks.open)
         guard shouldChangeText(in: target, replacementString: flipped) else { return true }
         storage.replaceCharacters(in: target, with: flipped)
         didChangeText()
         return true
+    }
+
+    // MARK: Images
+
+    /// A plain-text view validates ⌘V off when the pasteboard holds only image
+    /// data, which would keep paste(_:) from ever seeing it. Claim the command
+    /// whenever the clipboard can provide an image.
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if (item.action == #selector(paste(_:)) || item.action == #selector(pasteAsPlainText(_:))),
+           ImagePasteboard.canProvideImage(.general) {
+            return true
+        }
+        return super.validateUserInterfaceItem(item)
+    }
+
+    /// An image on the pasteboard becomes a token on its own line; everything
+    /// else keeps the plain-text paste behaviour.
+    override func paste(_ sender: Any?) {
+        if cancelImageRevealIfSelected() { return }
+        let ids = ImagePasteboard.imageIDs(from: .general)
+        guard !ids.isEmpty else {
+            super.paste(sender)
+            return
+        }
+        insertImageTokens(ids.map { ImageStore.token(id: $0, width: nil) })
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        ImagePasteboard.canProvideImage(sender.draggingPasteboard)
+            ? .copy : super.draggingEntered(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let ids = ImagePasteboard.imageIDs(from: sender.draggingPasteboard)
+        guard !ids.isEmpty else { return super.performDragOperation(sender) }
+        let point = convert(sender.draggingLocation, from: nil)
+        setSelectedRange(NSRange(location: characterIndexForInsertion(at: point), length: 0))
+        insertImageTokens(ids.map { ImageStore.token(id: $0, width: nil) })
+        return true
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        menu.addItem(.separator())
+        let item = NSMenuItem(title: L10n.text("menu.insert_image"),
+                              action: #selector(insertImageFromPanel(_:)),
+                              keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+        return menu
+    }
+
+    @objc func insertImageFromPanel(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK else { return }
+        let ids = panel.urls.compactMap { ImagePasteboard.saveFile(at: $0) }
+        insertImageTokens(ids.map { ImageStore.token(id: $0, width: nil) })
+    }
+
+    /// Insert each token on its own line at the caret as one undoable edit —
+    /// the same shouldChangeText / replaceCharacters / didChangeText pattern
+    /// as EditorBridge.toggleTaskLine, so undo and the style pipeline see a
+    /// normal text change. The caret lands on a fresh line BELOW the token:
+    /// leaving it on the token's own line would trip the caret-line reveal and
+    /// show raw markup instead of the image the user just dropped in.
+    func insertImageTokens(_ tokens: [String]) {
+        guard !tokens.isEmpty, let storage = textStorage else { return }
+        let ns = storage.string as NSString
+        var range = selectedRange()
+        if range.location == NSNotFound { range = NSRange(location: ns.length, length: 0) }
+        range = NSIntersectionRange(range, NSRange(location: 0, length: ns.length))
+        let atLineStart = range.location == 0 || ns.character(at: range.location - 1) == 10
+        let atLineEnd = NSMaxRange(range) >= ns.length
+            || ns.character(at: NSMaxRange(range)) == 10
+        var insertion = tokens.joined(separator: "\n") + "\n"
+        if !atLineStart { insertion = "\n" + insertion }
+        if !atLineEnd { insertion += "\n" }
+        guard shouldChangeText(in: range, replacementString: insertion) else { return }
+        storage.replaceCharacters(in: range, with: insertion)
+        didChangeText()
+        setSelectedRange(NSRange(location: range.location + (insertion as NSString).length,
+                                 length: 0))
     }
 }
 
@@ -270,6 +752,10 @@ struct NoteTextView: NSViewRepresentable {
                          textDirection: textDirection)
         Self.applyTextDirection(textDirection, to: tv)
         context.coordinator.attach(to: tv)
+        let overlays = NoteImageOverlayManager()
+        overlays.attach(to: tv, scrollView: scroll)
+        tv.imageOverlays = overlays
+        overlays.refresh()
         if autofocus {
             DispatchQueue.main.async { tv.window?.makeFirstResponder(tv) }
         }
@@ -311,6 +797,7 @@ struct NoteTextView: NSViewRepresentable {
         EditorStyleEngine.apply(to: tv,
                                 ranges: ranges,
                                 revealing: activeLine,
+                                forceRevealImageID: (tv as? TaskTextView)?.revealedImageID,
                                 ink: ink,
                                 size: size,
                                 markdownEnabled: markdownEnabled,
@@ -382,6 +869,29 @@ struct NoteTextView: NSViewRepresentable {
             guard !edits.hasPendingEdits else { return }
 
             let line = activeLine(in: tv)
+
+            // A revealed (delete-confirmation) image token hides again once the
+            // caret leaves its markup or the markup stops parsing as a token.
+            if let taskView = tv as? TaskTextView, let id = taskView.revealedImageID {
+                let token = ImageStore.tokens(in: taskView.string).first { $0.id == id }
+                let caret = taskView.selectedRange()
+                let inside = token.map { t in
+                    // The reveal's whole-token selection counts as inside; a
+                    // bare caret only up to the markup's end, so cancelling
+                    // (caret parked just past it) still re-hides the line.
+                    caret.length > 0
+                        ? NSIntersectionRange(caret, t.range).length > 0
+                        : caret.location >= t.range.location && caret.location < NSMaxRange(t.range)
+                } ?? false
+                if !inside {
+                    taskView.revealedImageID = nil
+                    let previous = lastLine
+                    lastLine = line
+                    applyIncremental([previous, line], to: tv, invalidateCursors: false)
+                    return
+                }
+            }
+
             guard parent.markdownEnabled else {
                 lastLine = line
                 return
@@ -434,6 +944,9 @@ struct NoteTextView: NSViewRepresentable {
                                      textDirection: parent.textDirection)
             isApplyingStyles = false
             lastLine = line
+            // The hidden-token set may have changed; overlays and reserved line
+            // heights are rebuilt from the freshly styled attributes.
+            (tv as? TaskTextView)?.imageOverlays?.refresh()
             if invalidateCursors { tv.window?.invalidateCursorRects(for: tv) }
         }
 
@@ -462,6 +975,7 @@ struct NoteTextView: NSViewRepresentable {
             lastLine = line
             needsFullPass = false
             rememberConfiguration()
+            (tv as? TaskTextView)?.imageOverlays?.refresh()
             tv.window?.invalidateCursorRects(for: tv)
         }
 
@@ -526,10 +1040,10 @@ struct NoteTextDirectionLabel: View {
         Group {
             if let symbol = direction.symbol {
                 Image(systemName: symbol)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(Ink.bodyFont(11).weight(.semibold))
             } else {
                 Text(L10n.text("direction.auto_short"))
-                    .font(.system(size: 9.5, weight: .semibold))
+                    .font(Ink.bodyFont(9.5).weight(.semibold))
             }
         }
         .foregroundStyle(foreground)
@@ -570,11 +1084,15 @@ struct NoteEditorView: View {
     unowned let controller: DeckController
     var onRight: Bool = true
 
-    @State private var text = ""
-    @State private var title = ""
-    @State private var saveWork: DispatchWorkItem?
-    @State private var titleSaveWork: DispatchWorkItem?
-    @State private var savedAt: Date?
+    @ObservedObject private var store = NoteStore.shared
+    private var text: String { store.note(id: note.id)?.body ?? "" }
+    private var title: String { store.note(id: note.id)?.title ?? "" }
+    private var textBinding: Binding<String> {
+        Binding(get: { text }, set: { store.updateBody(id: note.id, body: $0) })
+    }
+    private var titleBinding: Binding<String> {
+        Binding(get: { title }, set: { store.updateTitle(id: note.id, title: $0) })
+    }
     @State private var detaching = false
     @FocusState private var findFocused: Bool
     @FocusState private var titleFocused: Bool
@@ -595,13 +1113,6 @@ struct NoteEditorView: View {
         )
         .clipShape(noteShape)
         .overlay(noteShape.strokeBorder(Color.black.opacity(0.07), lineWidth: 0.5))
-        .onAppear {
-            text = note.body
-            title = note.title
-            savedAt = note.modified
-        }
-        .onChange(of: text) { _, v in scheduleSave(v) }
-        .onChange(of: title) { _, v in scheduleTitleSave(v) }
         .onChange(of: deck.findQuery) { _, q in
             if q != nil { findFocused = true } else { deck.bridge.focusText() }
         }
@@ -617,7 +1128,7 @@ struct NoteEditorView: View {
         VStack(spacing: 0) {
             header
             if deck.findQuery != nil { findBar }
-            NoteTextView(text: $text, ink: NSColor(pal.ink),
+            NoteTextView(text: textBinding, ink: NSColor(pal.ink),
                          bridge: deck.bridge, autofocus: true,
                          fontSize: deck.fontSize,
                          markdownEnabled: deck.markdown,
@@ -690,12 +1201,12 @@ struct NoteEditorView: View {
                         .lineLimit(1)
                         .allowsHitTesting(false)
                 }
-                TextField("", text: $title)
+                TextField("", text: titleBinding)
                     .textFieldStyle(.plain)
                     .foregroundStyle(pal.ink.opacity(0.92))
                     .focused($titleFocused)
             }
-            .font(.system(size: 12.5, weight: .semibold))
+            .font(Ink.bodyFont(12.5).weight(.semibold))
             .tint(pal.ink)
             .onSubmit {
                 flushTitle()
@@ -704,20 +1215,20 @@ struct NoteEditorView: View {
             .contextMenu {
                 if note.hasCustomTitle {
                     Button(L10n.text("note.title_reset")) {
-                        title = ""
                         NoteStore.shared.updateTitle(id: note.id, title: "")
                     }
                 }
             }
 
             Spacer(minLength: 6)
-            Text(savedAt.map { L10n.format("note.saved", Fmt.ago($0)) }
-                 ?? L10n.text("note.not_saved"))
-                .font(.system(size: 10))
+            Text(store.unsavedIDs.contains(note.id)
+                 ? L10n.text("note.not_saved")
+                 : L10n.format("note.saved", Fmt.ago(note.modified)))
+                .font(Ink.bodyFont(10))
                 .foregroundStyle(pal.ink.opacity(0.42))
             Button { NoteStore.shared.togglePin(id: note.id) } label: {
                 Image(systemName: note.pinned ? "pin.fill" : "pin")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(Ink.bodyFont(11).weight(.semibold))
                     .rotationEffect(.degrees(note.pinned ? 0 : 32))
                     .frame(width: 18, height: 18)
                     .contentShape(Rectangle())
@@ -733,7 +1244,7 @@ struct NoteEditorView: View {
 
             Button { deck.bridge.toggleTaskLine() } label: {
                 Image(systemName: "checklist")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(Ink.bodyFont(11).weight(.semibold))
                     .frame(width: 18, height: 18)
                     .contentShape(Rectangle())
             }
@@ -742,7 +1253,7 @@ struct NoteEditorView: View {
             .help(L10n.text("help.task"))
             Button { deck.findQuery = deck.findQuery == nil ? "" : nil } label: {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(Ink.bodyFont(10.5).weight(.semibold))
                     .frame(width: 18, height: 18)
                     .contentShape(Rectangle())
             }
@@ -757,23 +1268,23 @@ struct NoteEditorView: View {
     private var findBar: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 10)).foregroundStyle(pal.ink.opacity(0.45))
+                .font(Ink.bodyFont(10)).foregroundStyle(pal.ink.opacity(0.45))
             TextField(L10n.text("note.find_placeholder"), text: Binding(
                 get: { deck.findQuery ?? "" },
                 set: { deck.findQuery = $0; deck.bridge.recount($0) }))
                 .textFieldStyle(.plain)
-                .font(.system(size: 12))
+                .font(Ink.bodyFont(12))
                 .foregroundStyle(pal.ink)
                 .focused($findFocused)
                 .onSubmit { deck.bridge.findNext(deck.findQuery ?? "") }
             Text(deck.bridge.matchCount == 0 ? "—" : "\(deck.bridge.matchCount)")
-                .font(.system(size: 10.5).monospacedDigit())
+                .font(Ink.bodyFont(10.5).monospacedDigit())
                 .foregroundStyle(pal.ink.opacity(0.45))
             Button { deck.bridge.findNext(deck.findQuery ?? "", forward: false) } label: {
-                Image(systemName: "chevron.up").font(.system(size: 9, weight: .bold))
+                Image(systemName: "chevron.up").font(Ink.bodyFont(9).weight(.bold))
             }.buttonStyle(.plain).foregroundStyle(pal.ink.opacity(0.55))
             Button { deck.bridge.findNext(deck.findQuery ?? "") } label: {
-                Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
+                Image(systemName: "chevron.down").font(Ink.bodyFont(9).weight(.bold))
             }.buttonStyle(.plain).foregroundStyle(pal.ink.opacity(0.55))
         }
         .padding(.horizontal, 14)
@@ -787,13 +1298,13 @@ struct NoteEditorView: View {
                 Button { NoteStore.shared.setColor(id: note.id, color: idx) } label: {
                     Circle()
                         .fill(c.dash)
-                        .frame(width: 11, height: 11)
+                        .frame(width: 12, height: 12)
                         .overlay(
                             Circle().strokeBorder(pal.ink.opacity(0.55),
                                                   lineWidth: idx == note.color ? 1.5 : 0)
-                                .padding(-2.5)
+                                .padding(-2)
                         )
-                        .padding(2)
+                        .frame(width: 16, height: 16)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
@@ -817,7 +1328,7 @@ struct NoteEditorView: View {
     private func footerButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 10.5, weight: .medium))
+                .font(Ink.bodyFont(10.5).weight(.medium))
                 .foregroundStyle(pal.ink.opacity(0.72))
                 .padding(.horizontal, 8)
                 .frame(height: 20)
@@ -830,37 +1341,6 @@ struct NoteEditorView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: Autosave — 250 ms after typing stops
-
-    private func scheduleSave(_ value: String) {
-        saveWork?.cancel()
-        let work = DispatchWorkItem {
-            NoteStore.shared.updateBody(id: note.id, body: value)
-            savedAt = Date()
-        }
-        saveWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
-    }
-
-    private func scheduleTitleSave(_ value: String) {
-        titleSaveWork?.cancel()
-        let work = DispatchWorkItem {
-            NoteStore.shared.updateTitle(id: note.id, title: value)
-            savedAt = Date()
-        }
-        titleSaveWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
-    }
-
-    private func flushTitle() {
-        titleSaveWork?.cancel()
-        NoteStore.shared.updateTitle(id: note.id, title: title)
-    }
-
-    private func flush() {
-        saveWork?.cancel()
-        titleSaveWork?.cancel()
-        NoteStore.shared.updateBody(id: note.id, body: text)
-        NoteStore.shared.updateTitle(id: note.id, title: title)
-    }
+    private func flushTitle() { store.flush(id: note.id) }
+    private func flush() { store.flush(id: note.id) }
 }

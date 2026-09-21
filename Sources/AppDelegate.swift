@@ -25,10 +25,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // was opened, so a user who never right-clicked was never offered an
         // update however long the app ran.
         _ = Updater.shared
+
+        // Off unless the user asked for it; reload() is a no-op when it is off.
+        CloudSync.shared.reload()
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        NoteStore.shared.flushAll() ? .terminateNow : .terminateCancel
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         HotKeys.shared.unregisterAll()
+    }
+
+    /// Coming back to the Mac is the likeliest moment for the phone's edits to
+    /// be waiting, and the poll may be up to its full interval away.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        CloudSync.shared.syncNow()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
@@ -71,8 +84,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func refreshDecks() { deckManager.refreshAll() }
     func refreshDisplay() {
         DisplayPreferences.shared.refresh()
-        deckManager?.refreshTypography()
-        SettingsWindow.shared.syncTypography()
     }
     @objc func openArchive() { LibraryWindow.shared.show(mode: .archive) }
 
@@ -91,13 +102,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func setFontSize(_ sender: NSMenuItem) {
         guard let size = sender.representedObject as? Double else { return }
         Settings.noteFontSize = size
-        refreshDisplay()
+        refreshDecks()
     }
 
     /// ⌃+ / ⌃- while a note is open.
     func stepFontSize(by delta: Double) {
         Settings.noteFontSize += delta
-        refreshDisplay()
+        refreshDecks()
     }
 
     @objc func biggerText()  { stepFontSize(by: 1.5) }
@@ -106,7 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func setNoteFont(_ sender: NSMenuItem) {
         guard let name = sender.representedObject as? String else { return }
         Settings.noteFontName = name
-        refreshDisplay()
+        refreshDecks()
     }
 
     @objc func toggleDeckAlwaysShown() {
@@ -155,6 +166,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// window does not sit there claiming a language the running UI never uses.
     func relaunchForLanguageChange(previous: AppLanguage) {
         guard !isRelaunching else { return }
+        guard NoteStore.shared.flushAll() else {
+            Settings.appLanguage = previous
+            SettingsWindow.shared.syncPreferences()
+            return
+        }
         isRelaunching = true
 
         // Hand the new instance everything worth putting back: the expanded

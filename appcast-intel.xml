@@ -6,13 +6,13 @@
     <description>Sticky notes that live at the edge of your screen.</description>
     <language>en</language>
     <item>
-      <title>1.6.1</title>
-      <pubDate>Thu, 03 Sep 2026 15:39:39 +0000</pubDate>
-      <sparkle:version>115</sparkle:version>
-      <sparkle:shortVersionString>1.6.1</sparkle:shortVersionString>
+      <title>1.9.0</title>
+      <pubDate>Thu, 17 Sep 2026 06:36:39 +0000</pubDate>
+      <sparkle:version>147</sparkle:version>
+      <sparkle:shortVersionString>1.9.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[<p>Noty 1.6.1</p><ul><li><a href="https://github.com/aimen08/noty/pull/31">#31</a> fix: include first body line in preview when custom title is set &mdash; @yifjfgup</li></ul><p>Answered issues:</p><ul><li><a href="https://github.com/aimen08/noty/issues/30">#30</a> Hover preview card displays &quot;Empty note&quot; for notes with custom titles and   single-line bodies &mdash; requested by @yifjfgup</li></ul>]]></description>
-      <enclosure url="https://github.com/aimen08/noty/releases/download/v1.6.1/Noty-intel.dmg" type="application/octet-stream" sparkle:edSignature="5eSl7PmZsphMSSl0YlL2/OYN0vKNBtrB0qnMWPGOY+bdfSMGcLFc0JjmDuoitiyOeqZr8Ee/BdHQz1Pjc9aNDA==" length="1998580" />
+      <description><![CDATA[<p>Noty 1.9.0</p><ul><li><a href="https://github.com/aimen08/noty/pull/42">#42</a> Feature/markdown editor enhancements &mdash; @zwmmm</li></ul>]]></description>
+      <enclosure url="https://github.com/aimen08/noty/releases/download/v1.9.0/Noty-intel.dmg" type="application/octet-stream" sparkle:edSignature="IwT08bOg6t/xEjVZADCKJvdNJeoTkrDokkwsC6nqCgos/7IZ0dmWtFi5Me7XdgkacF66XidNpkmja9jsaVQZAQ==" length="2341390" />
     </item>
   </channel>
 </rss>

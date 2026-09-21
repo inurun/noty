@@ -37,7 +37,8 @@ final class FloatingNote: NSObject, NSWindowDelegate {
         p.backgroundColor = .clear
         p.hasShadow = true
         p.level = .floating
-        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        p.collectionBehavior = Settings.confineToSpace
+            ? [.fullScreenAuxiliary] : [.canJoinAllSpaces, .fullScreenAuxiliary]
         p.isReleasedWhenClosed = false
         p.delegate = self
         p.contentView = NSHostingView(rootView: FloatingNoteView(
@@ -202,8 +203,12 @@ private struct FloatingNoteView: View {
 
     @ObservedObject private var store = NoteStore.shared
     @StateObject private var bridge = EditorBridge()
-    @State private var text = ""
-    @State private var saveWork: DispatchWorkItem?
+    private var textBinding: Binding<String> {
+        Binding(get: { store.note(id: noteID)?.body ?? "" }, set: {
+            onActivity()
+            store.updateBody(id: noteID, body: $0)
+        })
+    }
 
     private var note: Note? { store.note(id: noteID) }
 
@@ -212,7 +217,7 @@ private struct FloatingNoteView: View {
             let pal = note.palette
             VStack(spacing: 0) {
                 header(note, pal)
-                NoteTextView(text: $text, ink: NSColor(pal.ink),
+                NoteTextView(text: textBinding, ink: NSColor(pal.ink),
                              bridge: bridge, autofocus: false,
                              fontSize: Settings.noteFontSize,
                              markdownEnabled: Settings.markdownStyling,
@@ -230,11 +235,6 @@ private struct FloatingNoteView: View {
                     .strokeBorder(pal.ink.opacity(0.14), lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .onAppear { text = note.body }
-            .onChange(of: text) { _, value in
-                onActivity()
-                scheduleSave(value)
-            }
             .onDisappear { flush() }
         }
     }
@@ -243,7 +243,7 @@ private struct FloatingNoteView: View {
         HStack(spacing: 8) {
             Circle().fill(pal.dash).frame(width: 8, height: 8)
             Text(note.displayTitle)
-                .font(.system(size: 12.5, weight: .semibold))
+                .font(Ink.bodyFont(12.5).weight(.semibold))
                 .foregroundStyle(pal.ink.opacity(0.92))
                 .lineLimit(1)
             Spacer(minLength: 6)
@@ -252,7 +252,7 @@ private struct FloatingNoteView: View {
                 FloatingNote.shared.applyLevel()
             } label: {
                 Image(systemName: note.pinned ? "pin.fill" : "pin")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(Ink.bodyFont(11).weight(.semibold))
                     .rotationEffect(.degrees(note.pinned ? 0 : 32))
                     .frame(width: 18, height: 18)
                     .contentShape(Rectangle())
@@ -262,7 +262,7 @@ private struct FloatingNoteView: View {
             .help(note.pinned ? L10n.text("help.unpin") : L10n.text("help.pin"))
             Button { flush(); onClose() } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(Ink.bodyFont(10).weight(.bold))
                     .frame(width: 18, height: 18)
                     .contentShape(Rectangle())
             }
@@ -278,19 +278,5 @@ private struct FloatingNoteView: View {
         .gesture(WindowDragGesture())
     }
 
-    private func scheduleSave(_ value: String) {
-        saveWork?.cancel()
-        let work = DispatchWorkItem {
-            NoteStore.shared.updateBody(id: noteID, body: value)
-        }
-        saveWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
-    }
-
-    private func flush() {
-        saveWork?.cancel()
-        if !text.isEmpty || note?.body.isEmpty == false {
-            NoteStore.shared.updateBody(id: noteID, body: text)
-        }
-    }
+    private func flush() { store.flush(id: noteID) }
 }

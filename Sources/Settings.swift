@@ -283,15 +283,43 @@ enum Settings {
         set { d.set(newValue, forKey: "markdownStyling") }
     }
 
+    /// Mirror notes into iCloud Drive. Off by default and deliberately so: a
+    /// synced note is written out as plain Markdown, which takes it out of the
+    /// AES-GCM database. Nobody gets that by accident.
+    static var cloudSyncEnabled: Bool {
+        get { d.bool(forKey: "cloudSyncEnabled") }
+        set { d.set(newValue, forKey: "cloudSyncEnabled") }
+    }
+
+    /// How often the sync folder is re-listed. A pass only reads files whose
+    /// modification date moved, so this is a directory listing, not a re-read.
+    static let cloudSyncInterval: TimeInterval = 5
+
     /// How long the deck may sit untouched before it tidies itself away.
     static let fanIdleTimeout: TimeInterval = 4
     static let noteIdleTimeout: TimeInterval = 60
+
+    /// Stop Noty's windows from following the user to every Space: the deck
+    /// and any floating notes stay on the Space they are on, like paper
+    /// stickies on one desk. Off by default — the deck follows everywhere.
+    static var confineToSpace: Bool {
+        get { d.bool(forKey: "confineToSpace") }
+        set { d.set(newValue, forKey: "confineToSpace") }
+    }
 
     /// Keep the deck fanned out instead of letting it fall back to the pill.
     /// Only the *resting* state changes — notes still open and tidy away as usual.
     static var deckAlwaysShown: Bool {
         get { d.bool(forKey: "deckAlwaysShown") }
         set { d.set(newValue, forKey: "deckAlwaysShown") }
+    }
+
+    /// With the deck kept open its + and cog buttons sit on screen all day;
+    /// this trades them for a quieter edge (issue #36). The menu bar icon and
+    /// hotkeys still create notes and open Settings.
+    static var deckHideActions: Bool {
+        get { d.bool(forKey: "deckHideActions") }
+        set { d.set(newValue, forKey: "deckHideActions") }
     }
 
     /// The size the floating note was last resized to. It starts at the deck
