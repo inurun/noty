@@ -1,6 +1,6 @@
 cask "noty-local" do
-  version "2026.09.08.092008"
-  sha256 "27642f4db56e260f788daacc61f33c2c84c6129b87f8a6957bc7ba66c8eb7a6b"
+  version "2026.09.21.072853"
+  sha256 "0682acbfe6ad3530a5ee1af9610c535090c61d59e9d22ee0e844dcfcae6ec76a"
 
   url "https://github.com/inurun/noty/releases/download/local-v#{version}/Noty-local-#{version}-universal.zip"
   name "Noty (Personal Fork)"
